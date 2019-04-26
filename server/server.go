@@ -21,9 +21,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/smallnest/rpcx/log"
-	"github.com/smallnest/rpcx/protocol"
-	"github.com/smallnest/rpcx/share"
+	"github.com/h2san/rpcx/log"
+	"github.com/h2san/rpcx/protocol"
+	"github.com/h2san/rpcx/share"
 )
 
 // ErrServerClosed is returned by the Server's Serve, ListenAndServe after a call to Shutdown or Close.
@@ -59,10 +59,9 @@ var (
 
 // Server is rpcx server that use TCP or UDP.
 type Server struct {
-	ln                net.Listener
-	readTimeout       time.Duration
-	writeTimeout      time.Duration
-	gatewayHTTPServer *http.Server
+	ln           net.Listener
+	readTimeout  time.Duration
+	writeTimeout time.Duration
 
 	serviceMapMu sync.RWMutex
 	serviceMap   map[string]*service
@@ -77,11 +76,6 @@ type Server struct {
 
 	// TLSConfig for creating tls tcp connection.
 	tlsConfig *tls.Config
-	// BlockCrypt for kcp.BlockCrypt
-	options map[string]interface{}
-
-	// CORS options
-	corsOptions *CORSOptions
 
 	Plugins PluginContainer
 
@@ -95,7 +89,6 @@ type Server struct {
 func NewServer(options ...OptionFn) *Server {
 	s := &Server{
 		Plugins: &pluginContainer{},
-		options: make(map[string]interface{}),
 	}
 
 	for _, op := range options {
@@ -195,9 +188,6 @@ func (s *Server) Serve(network, address string) (err error) {
 		s.serveByHTTP(ln, "")
 		return nil
 	}
-
-	// try to start gateway
-	ln = s.startGateway(network, ln)
 
 	return s.serveListener(ln)
 }
@@ -683,14 +673,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			}
 		}
 		s.Close()
-
-		if s.gatewayHTTPServer != nil {
-			if err := s.closeHTTP1APIGateway(ctx); err != nil {
-				log.Warnf("failed to close gateway: %v", err)
-			} else {
-				log.Info("closed gateway")
-			}
-		}
 		log.Info("shutdown end")
 	}
 	return nil

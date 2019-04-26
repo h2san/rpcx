@@ -1,7 +1,7 @@
 package protocol
 
 import (
-	"github.com/smallnest/rpcx/util"
+	"github.com/h2san/rpcx/util"
 )
 
 // Compressor defines a common compression interface.

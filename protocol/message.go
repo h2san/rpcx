@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/smallnest/rpcx/util"
+	"github.com/h2san/rpcx/util"
 )
 
 var (
@@ -85,11 +85,6 @@ const (
 	JSON
 	// ProtoBuffer for payload.
 	ProtoBuffer
-	// MsgPack for payload
-	MsgPack
-	// Thrift
-	// Thrift for payload
-	Thrift
 )
 
 // Message is the generic type of Request and Response.

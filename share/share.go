@@ -2,27 +2,14 @@ package share
 
 import (
 	"github.com/smallnest/rpcx/codec"
-	"github.com/smallnest/rpcx/protocol"
+	"github.com/h2san/rpcx/protocol"
 )
 
 const (
 	// DefaultRPCPath is used by ServeHTTP.
 	DefaultRPCPath = "/_rpcx_"
-
 	// AuthKey is used in metadata.
 	AuthKey = "__AUTH"
-
-	// OpentracingSpanServerKey key in service context
-	OpentracingSpanServerKey = "opentracing_span_server_key"
-	// OpentracingSpanClientKey key in client context
-	OpentracingSpanClientKey = "opentracing_span_client_key"
-
-	// OpencensusSpanServerKey key in service context
-	OpencensusSpanServerKey = "opencensus_span_server_key"
-	// OpencensusSpanClientKey key in client context
-	OpencensusSpanClientKey = "opencensus_span_client_key"
-	// OpencensusSpanRequestKey span key in request meta
-	OpencensusSpanRequestKey = "opencensus_span_request_key"
 )
 
 var (
@@ -31,8 +18,6 @@ var (
 		protocol.SerializeNone: &codec.ByteCodec{},
 		protocol.JSON:          &codec.JSONCodec{},
 		protocol.ProtoBuffer:   &codec.PBCodec{},
-		protocol.MsgPack:       &codec.MsgpackCodec{},
-		protocol.Thrift:        &codec.ThriftCodec{},
 	}
 )
 

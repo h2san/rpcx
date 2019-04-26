@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"github.com/opentracing/opentracing-go"
+	"github.com/rubyist/circuitbreaker"
 	"io"
 	"net"
 	"net/url"
@@ -13,11 +15,9 @@ import (
 	"sync"
 	"time"
 
-	opentracing "github.com/opentracing/opentracing-go"
-	circuit "github.com/rubyist/circuitbreaker"
-	"github.com/smallnest/rpcx/log"
-	"github.com/smallnest/rpcx/protocol"
-	"github.com/smallnest/rpcx/share"
+	"github.com/h2san/rpcx/log"
+	"github.com/h2san/rpcx/protocol"
+	"github.com/h2san/rpcx/share"
 	"go.opencensus.io/trace"
 )
 
