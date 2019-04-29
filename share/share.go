@@ -1,7 +1,7 @@
 package share
 
 import (
-	"github.com/smallnest/rpcx/codec"
+	"github.com/h2san/rpcx/codec"
 	"github.com/h2san/rpcx/protocol"
 )
 
