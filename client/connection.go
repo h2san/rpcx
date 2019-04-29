@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/smallnest/rpcx/log"
-	"github.com/smallnest/rpcx/share"
+	"github.com/h2san/rpcx/log"
+	"github.com/h2san/rpcx/share"
 )
 
 type makeConnFn func(c *Client, network, address string) (net.Conn, error)
@@ -25,10 +25,6 @@ func (c *Client) Connect(network, address string) error {
 	switch network {
 	case "http":
 		conn, err = newDirectHTTPConn(c, network, address)
-	case "kcp":
-		conn, err = newDirectKCPConn(c, network, address)
-	case "quic":
-		conn, err = newDirectQuicConn(c, network, address)
 	case "unix":
 		conn, err = newDirectConn(c, network, address)
 	default:
