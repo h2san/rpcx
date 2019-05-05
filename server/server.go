@@ -5,11 +5,8 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"io"
 	"net"
-	"net/http"
-	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
@@ -63,9 +60,6 @@ type Server struct {
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 
-	serviceMapMu sync.RWMutex
-	serviceMap   map[string]*service
-
 	mu         sync.RWMutex
 	activeConn map[net.Conn]struct{}
 	doneChan   chan struct{}
@@ -77,10 +71,9 @@ type Server struct {
 	// TLSConfig for creating tls tcp connection.
 	tlsConfig *tls.Config
 
-	Plugins PluginContainer
+	Protocol protocol.MsgProtocol
 
-	// AuthFunc can be used to auth.
-	AuthFunc func(ctx context.Context, req *protocol.Message, token string) error
+	Plugins PluginContainer
 
 	handlerMsgNum int32
 }
@@ -118,36 +111,6 @@ func (s *Server) ActiveClientConn() []net.Conn {
 	return result
 }
 
-// SendMessage a request to the specified client.
-// The client is designated by the conn.
-// conn can be gotten from context in services:
-//
-//   ctx.Value(RemoteConnContextKey)
-//
-// servicePath, serviceMethod, metadata can be set to zero values.
-func (s *Server) SendMessage(conn net.Conn, servicePath, serviceMethod string, metadata map[string]string, data []byte) error {
-	ctx := share.WithValue(context.Background(), StartSendRequestContextKey, time.Now().UnixNano())
-	s.Plugins.DoPreWriteRequest(ctx)
-
-	req := protocol.GetPooledMsg()
-	req.SetMessageType(protocol.Request)
-
-	seq := atomic.AddUint64(&s.seq, 1)
-	req.SetSeq(seq)
-	req.SetOneway(true)
-	req.SetSerializeType(protocol.SerializeNone)
-	req.ServicePath = servicePath
-	req.ServiceMethod = serviceMethod
-	req.Metadata = metadata
-	req.Payload = data
-
-	reqData := req.Encode()
-	_, err := conn.Write(reqData)
-	s.Plugins.DoPostWriteRequest(ctx, req, err)
-	protocol.FreeMsg(req)
-	return err
-}
-
 func (s *Server) getDoneChan() <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -183,12 +146,6 @@ func (s *Server) Serve(network, address string) (err error) {
 	if err != nil {
 		return
 	}
-
-	if network == "http" {
-		s.serveByHTTP(ln, "")
-		return nil
-	}
-
 	return s.serveListener(ln)
 }
 
@@ -256,28 +213,14 @@ func (s *Server) serveListener(ln net.Listener) error {
 	}
 }
 
-// serveByHTTP serves by HTTP.
-// if rpcPath is an empty string, use share.DefaultRPCPath.
-func (s *Server) serveByHTTP(ln net.Listener, rpcPath string) {
-	s.ln = ln
 
-	if s.Plugins == nil {
-		s.Plugins = &pluginContainer{}
-	}
-
-	if rpcPath == "" {
-		rpcPath = share.DefaultRPCPath
-	}
-	http.Handle(rpcPath, s)
-	srv := &http.Server{Handler: nil}
-
-	s.mu.Lock()
-	if s.activeConn == nil {
-		s.activeConn = make(map[net.Conn]struct{})
-	}
-	s.mu.Unlock()
-
-	srv.Serve(ln)
+type activeConn struct {
+	server    *Server
+	conn      net.Conn
+	cancelCtx context.CancelFunc
+	mu        sync.Mutex
+	in        chan protocol.Message
+	out       chan protocol.Message
 }
 
 func (s *Server) serveConn(conn net.Conn) {
@@ -321,113 +264,148 @@ func (s *Server) serveConn(conn net.Conn) {
 			return
 		}
 	}
+	ctx := context.Background()
+	ctx, cancelCtx := context.WithCancel(ctx)
+	connctx := share.WithValue(ctx, "X-SERVER", s)
+
+	in := make(chan protocol.Message, 10)
+	out := make(chan protocol.Message, 10)
 
 	r := bufio.NewReaderSize(conn, ReaderBuffsize)
 
-	for {
-		if isShutdown(s) {
-			closeChannel(s, conn)
-			return
-		}
+	var wg sync.WaitGroup
+	wg.Add(3)
 
-		t0 := time.Now()
-		if s.readTimeout != 0 {
-			conn.SetReadDeadline(t0.Add(s.readTimeout))
-		}
-
-		ctx := share.WithValue(context.Background(), RemoteConnContextKey, conn)
-
-		req, err := s.readRequest(ctx, r)
-		if err != nil {
-			if err == io.EOF {
-				log.Infof("client has closed this connection: %s", conn.RemoteAddr().String())
-			} else if strings.Contains(err.Error(), "use of closed network connection") {
-				log.Infof("rpcx: connection %s is closed", conn.RemoteAddr().String())
-			} else {
-				log.Warnf("rpcx: failed to read request: %v", err)
-			}
-			return
-		}
-
-		if s.writeTimeout != 0 {
-			conn.SetWriteDeadline(t0.Add(s.writeTimeout))
-		}
-
-		ctx = share.WithLocalValue(ctx, StartRequestContextKey, time.Now().UnixNano())
-		if !req.IsHeartbeat() {
-			err = s.auth(ctx, req)
-		}
-
-		if err != nil {
-			if !req.IsOneway() {
-				res := req.Clone()
-				res.SetMessageType(protocol.Response)
-				if len(res.Payload) > 1024 && req.CompressType() != protocol.None {
-					res.SetCompressType(req.CompressType())
-				}
-				handleError(res, err)
-				data := res.Encode()
-
-				s.Plugins.DoPreWriteResponse(ctx, req, res)
-				conn.Write(data)
-				s.Plugins.DoPostWriteResponse(ctx, req, res, err)
-				protocol.FreeMsg(res)
-			} else {
-				s.Plugins.DoPreWriteResponse(ctx, req, nil)
-			}
-			protocol.FreeMsg(req)
-			continue
-		}
-		go func() {
-			atomic.AddInt32(&s.handlerMsgNum, 1)
+	// 1. read request msg
+	{
+		go func(ctx *share.Context, in chan<- protocol.Message) {
 			defer func() {
-				atomic.AddInt32(&s.handlerMsgNum, -1)
-			}()
-			if req.IsHeartbeat() {
-				req.SetMessageType(protocol.Response)
-				data := req.Encode()
-				conn.Write(data)
-				return
-			}
-
-			resMetadata := make(map[string]string)
-			newCtx := share.WithLocalValue(share.WithLocalValue(ctx, share.ReqMetaDataKey, req.Metadata),
-				share.ResMetaDataKey, resMetadata)
-
-			s.Plugins.DoPreHandleRequest(newCtx, req)
-
-			res, err := s.handleRequest(newCtx, req)
-
-			if err != nil {
-				log.Warnf("rpcx: failed to handle request: %v", err)
-			}
-
-			s.Plugins.DoPreWriteResponse(newCtx, req, res)
-			if !req.IsOneway() {
-				if len(resMetadata) > 0 { //copy meta in context to request
-					meta := res.Metadata
-					if meta == nil {
-						res.Metadata = resMetadata
-					} else {
-						for k, v := range resMetadata {
-							meta[k] = v
-						}
+				if err := recover(); err != nil {
+					const size = 64 << 10
+					buf := make([]byte, size)
+					ss := runtime.Stack(buf, false)
+					if ss > size {
+						ss = size
 					}
+					buf = buf[:ss]
+					log.Errorf("serving %s panic error: %s, stack:\n %s", conn.RemoteAddr(), err, buf)
+				}
+				wg.Done()
+				cancelCtx()
+			}()
+
+			for {
+				if isShutdown(s) {
+					closeChannel(s, conn)
+					return
 				}
 
-				if len(res.Payload) > 1024 && req.CompressType() != protocol.None {
-					res.SetCompressType(req.CompressType())
+				t0 := time.Now()
+				if s.readTimeout != 0 {
+					conn.SetReadDeadline(t0.Add(s.readTimeout))
 				}
-				data := res.Encode()
-				conn.Write(data)
-				//res.WriteTo(conn)
+				req, err := s.Protocol.DecodeMessage(r)
+				if err != nil {
+					if err == io.EOF {
+						log.Infof("client has closed this connection: %s", conn.RemoteAddr().String())
+					} else if strings.Contains(err.Error(), "use of closed network connection") {
+						log.Infof("rpcx: connection %s is closed", conn.RemoteAddr().String())
+					} else {
+						log.Warnf("rpcx: failed to read request: %v", err)
+					}
+					return
+				}
+				select {
+				case <-ctx.Done():
+					log.Infof("connection: %s read routine context done %v", conn.RemoteAddr().String(),ctx.Err())
+					return
+				case in <- req:
+					log.Infof("read a message from %v", conn.RemoteAddr())
+				}
 			}
-			s.Plugins.DoPostWriteResponse(newCtx, req, res, err)
-
-			protocol.FreeMsg(req)
-			protocol.FreeMsg(res)
-		}()
+		}(connctx, in)
 	}
+
+	// 2. handler request msg
+	{
+		go func(ctx *share.Context, in <-chan protocol.Message, out chan<- protocol.Message) {
+			defer func() {
+				if err := recover(); err != nil {
+					const size = 64 << 10
+					buf := make([]byte, size)
+					ss := runtime.Stack(buf, false)
+					if ss > size {
+						ss = size
+					}
+					buf = buf[:ss]
+					log.Errorf("serving %s panic error: %s, stack:\n %s", conn.RemoteAddr(), err, buf)
+				}
+				wg.Done()
+				cancelCtx()
+			}()
+			for {
+				select {
+				case <-ctx.Done():
+					log.Infof("connection: %s handle routine context done %v", conn.RemoteAddr().String(),ctx.Err())
+					return
+				case req := <-in:
+					go func() {
+						defer func() {
+							if err := recover(); err != nil {
+								const size = 64 << 10
+								buf := make([]byte, size)
+								ss := runtime.Stack(buf, false)
+								if ss > size {
+									ss = size
+								}
+								buf = buf[:ss]
+								log.Errorf("serving %s panic error: %s, stack:\n %s", conn.RemoteAddr(), err, buf)
+							}
+						}()
+						ctx.SetValue("serverr",s)
+						resp, err := s.Protocol.HandleMessage(ctx, req)
+						if err != nil {
+							log.Warnf("rpc: failed to handle request: %v", err)
+							out <- resp
+						}
+					}()
+				}
+			}
+		}(connctx, in, out)
+	}
+
+	// 3. write response msg
+	{
+		go func(ctx *share.Context, ch <-chan protocol.Message) {
+			defer func() {
+				if err := recover(); err != nil {
+					const size = 64 << 10
+					buf := make([]byte, size)
+					ss := runtime.Stack(buf, false)
+					if ss > size {
+						ss = size
+					}
+					buf = buf[:ss]
+					log.Errorf("serving %s panic error: %s, stack:\n %s", conn.RemoteAddr(), err, buf)
+				}
+				wg.Done()
+				cancelCtx()
+			}()
+
+			for{
+				select {
+				case <- ctx.Done():
+					log.Infof(" connection: %s write routine context done %v", conn.RemoteAddr().String(),ctx.Err())
+					return
+				case resp := <- out:
+					data := s.Protocol.EncodeMessage(resp)
+					conn.Write(data)
+				}
+			}
+		}(connctx, out)
+	}
+	wg.Wait()
+	log.Infof(" connection %s destroyed %v", conn.RemoteAddr().String())
 }
 
 func isShutdown(s *Server) bool {
@@ -441,185 +419,11 @@ func closeChannel(s *Server, conn net.Conn) {
 	conn.Close()
 }
 
-func (s *Server) readRequest(ctx context.Context, r io.Reader) (req *protocol.Message, err error) {
-	err = s.Plugins.DoPreReadRequest(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// pool req?
-	req = protocol.GetPooledMsg()
-	err = req.Decode(r)
-	if err == io.EOF {
-		return req, err
-	}
-	perr := s.Plugins.DoPostReadRequest(ctx, req, err)
-	if err == nil {
-		err = perr
-	}
-	return req, err
-}
 
-func (s *Server) auth(ctx context.Context, req *protocol.Message) error {
-	if s.AuthFunc != nil {
-		token := req.Metadata[share.AuthKey]
-		return s.AuthFunc(ctx, req, token)
-	}
+
+func (s *Server) auth(ctx context.Context, req *protocol.MsgProtocol) error {
 
 	return nil
-}
-
-func (s *Server) handleRequest(ctx context.Context, req *protocol.Message) (res *protocol.Message, err error) {
-	serviceName := req.ServicePath
-	methodName := req.ServiceMethod
-
-	res = req.Clone()
-
-	res.SetMessageType(protocol.Response)
-	s.serviceMapMu.RLock()
-	service := s.serviceMap[serviceName]
-	s.serviceMapMu.RUnlock()
-	if service == nil {
-		err = errors.New("rpcx: can't find service " + serviceName)
-		return handleError(res, err)
-	}
-	mtype := service.method[methodName]
-	if mtype == nil {
-		if service.function[methodName] != nil { //check raw functions
-			return s.handleRequestForFunction(ctx, req)
-		}
-		err = errors.New("rpcx: can't find method " + methodName)
-		return handleError(res, err)
-	}
-
-	var argv = argsReplyPools.Get(mtype.ArgType)
-
-	codec := share.Codecs[req.SerializeType()]
-	if codec == nil {
-		err = fmt.Errorf("can not find codec for %d", req.SerializeType())
-		return handleError(res, err)
-	}
-
-	err = codec.Decode(req.Payload, argv)
-	if err != nil {
-		return handleError(res, err)
-	}
-
-	replyv := argsReplyPools.Get(mtype.ReplyType)
-
-	if mtype.ArgType.Kind() != reflect.Ptr {
-		err = service.call(ctx, mtype, reflect.ValueOf(argv).Elem(), reflect.ValueOf(replyv))
-	} else {
-		err = service.call(ctx, mtype, reflect.ValueOf(argv), reflect.ValueOf(replyv))
-	}
-
-	argsReplyPools.Put(mtype.ArgType, argv)
-	if err != nil {
-		argsReplyPools.Put(mtype.ReplyType, replyv)
-		return handleError(res, err)
-	}
-
-	if !req.IsOneway() {
-		data, err := codec.Encode(replyv)
-		argsReplyPools.Put(mtype.ReplyType, replyv)
-		if err != nil {
-			return handleError(res, err)
-
-		}
-		res.Payload = data
-	}
-
-	return res, nil
-}
-
-func (s *Server) handleRequestForFunction(ctx context.Context, req *protocol.Message) (res *protocol.Message, err error) {
-	res = req.Clone()
-
-	res.SetMessageType(protocol.Response)
-
-	serviceName := req.ServicePath
-	methodName := req.ServiceMethod
-	s.serviceMapMu.RLock()
-	service := s.serviceMap[serviceName]
-	s.serviceMapMu.RUnlock()
-	if service == nil {
-		err = errors.New("rpcx: can't find service  for func raw function")
-		return handleError(res, err)
-	}
-	mtype := service.function[methodName]
-	if mtype == nil {
-		err = errors.New("rpcx: can't find method " + methodName)
-		return handleError(res, err)
-	}
-
-	var argv = argsReplyPools.Get(mtype.ArgType)
-
-	codec := share.Codecs[req.SerializeType()]
-	if codec == nil {
-		err = fmt.Errorf("can not find codec for %d", req.SerializeType())
-		return handleError(res, err)
-	}
-
-	err = codec.Decode(req.Payload, argv)
-	if err != nil {
-		return handleError(res, err)
-	}
-
-	replyv := argsReplyPools.Get(mtype.ReplyType)
-
-	err = service.callForFunction(ctx, mtype, reflect.ValueOf(argv), reflect.ValueOf(replyv))
-
-	argsReplyPools.Put(mtype.ArgType, argv)
-
-	if err != nil {
-		argsReplyPools.Put(mtype.ReplyType, replyv)
-		return handleError(res, err)
-	}
-
-	if !req.IsOneway() {
-		data, err := codec.Encode(replyv)
-		argsReplyPools.Put(mtype.ReplyType, replyv)
-		if err != nil {
-			return handleError(res, err)
-
-		}
-		res.Payload = data
-	}
-
-	return res, nil
-}
-
-func handleError(res *protocol.Message, err error) (*protocol.Message, error) {
-	res.SetMessageStatusType(protocol.Error)
-	if res.Metadata == nil {
-		res.Metadata = make(map[string]string)
-	}
-	res.Metadata[protocol.ServiceError] = err.Error()
-	return res, err
-}
-
-// Can connect to RPC service using HTTP CONNECT to rpcPath.
-var connected = "200 Connected to rpcx"
-
-// ServeHTTP implements an http.Handler that answers RPC requests.
-func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if req.Method != "CONNECT" {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		io.WriteString(w, "405 must CONNECT\n")
-		return
-	}
-	conn, _, err := w.(http.Hijacker).Hijack()
-	if err != nil {
-		log.Info("rpc hijacking ", req.RemoteAddr, ": ", err.Error())
-		return
-	}
-	io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
-
-	s.mu.Lock()
-	s.activeConn[conn] = struct{}{}
-	s.mu.Unlock()
-
-	s.serveConn(conn)
 }
 
 // Close immediately closes all active net.Listeners.

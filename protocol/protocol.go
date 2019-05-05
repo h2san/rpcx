@@ -3,15 +3,24 @@ package protocol
 import (
 	"context"
 	"io"
-
-	"github.com/smallnest/rpcx/protocol"
 )
 
-const ()
-
-//Message ...
-type Message interface {
-	Decode(r io.Reader) error
-	handleMessage(ctx context.Context, req *protocol.Message) (res *protocol.Message, err error)
-	Encode() []byte
+type Message interface {}
+//Protocol ...
+type MsgProtocol interface {
+	DecodeMessage(r io.Reader) (Message,error)
+	HandleMessage(ctx context.Context, req Message) (resp Message, err error)
+	EncodeMessage(res Message) []byte
 }
+
+// SerializeType defines serialization type of payload.
+type SerializeType byte
+
+const (
+	// SerializeNone uses raw []byte and don't serialize/deserialize
+	SerializeNone SerializeType = iota
+	// JSON for payload.
+	JSON
+	// ProtoBuffer for payload.
+	ProtoBuffer
+)
