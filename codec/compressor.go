@@ -1,8 +1,10 @@
-package protocol
+package codec
 
 import (
 	"github.com/h2san/rpcx/util"
 )
+
+
 
 // Compressor defines a common compression interface.
 type Compressor interface {

@@ -1,4 +1,4 @@
-package rpcx
+package protocol
 
 import (
 	"context"
@@ -14,12 +14,19 @@ import (
 	"github.com/h2san/rpcx/log"
 )
 
+
 // Precompute the reflect type for error. Can't use error directly
 // because Typeof takes an empty interface value. This is annoying.
 var typeOfError = reflect.TypeOf((*error)(nil)).Elem()
 
 // Precompute the reflect type for context.
 var typeOfContext = reflect.TypeOf((*context.Context)(nil)).Elem()
+
+
+type BaseService struct {
+	ServiceMapMu sync.RWMutex
+	ServiceMap   map[string]*service
+}
 
 type methodType struct {
 	sync.Mutex // protects counters
@@ -44,6 +51,14 @@ type service struct {
 	function map[string]*functionType // registered functions
 }
 
+func (s *service) GetMethod(methodName string)*methodType{
+	return s.method[methodName]
+}
+
+func (s *service) GetFunction(functionName string)*functionType{
+	return s.function[functionName]
+}
+
 func isExported(name string) bool {
 	rune, _ := utf8.DecodeRuneInString(name)
 	return unicode.IsUpper(rune)
@@ -59,14 +74,14 @@ func isExportedOrBuiltinType(t reflect.Type) bool {
 }
 
 
-func (p *RPCXProtocol) Register(rcvr interface{}, metadata string) error {
+func (p *BaseService) Register(rcvr interface{}, metadata string) error {
 	_, err := p.register(rcvr, "", false)
 	return err
 }
 
 // RegisterName is like Register but uses the provided name for the type
 // instead of the receiver's concrete type.
-func (p *RPCXProtocol) RegisterName(name string, rcvr interface{}, metadata string) error {
+func (p *BaseService) RegisterName(name string, rcvr interface{}, metadata string) error {
 	_, err := p.register(rcvr, name, true)
 	return err
 }
@@ -76,23 +91,23 @@ func (p *RPCXProtocol) RegisterName(name string, rcvr interface{}, metadata stri
 //	- the third argument is a pointer
 //	- one return value, of type error
 // The client accesses function using a string of the form "servicePath.Method".
-func (p *RPCXProtocol) RegisterFunction(servicePath string, fn interface{}, metadata string) error {
+func (p *BaseService) RegisterFunction(servicePath string, fn interface{}, metadata string) error {
 	_, err := p.registerFunction(servicePath, fn, "", false)
 	return err
 }
 
 // RegisterFunctionName is like RegisterFunction but uses the provided name for the function
 // instead of the function's concrete type.
-func (p *RPCXProtocol) RegisterFunctionName(servicePath string, name string, fn interface{}, metadata string) error {
+func (p *BaseService) RegisterFunctionName(servicePath string, name string, fn interface{}, metadata string) error {
 	_, err := p.registerFunction(servicePath, fn, name, true)
 	return err
 }
 
-func (p *RPCXProtocol) register(rcvr interface{}, name string, useName bool) (string, error) {
-	p.serviceMapMu.Lock()
-	defer p.serviceMapMu.Unlock()
-	if p.serviceMap == nil {
-		p.serviceMap = make(map[string]*service)
+func (p *BaseService) register(rcvr interface{}, name string, useName bool) (string, error) {
+	p.ServiceMapMu.Lock()
+	defer p.ServiceMapMu.Unlock()
+	if p.ServiceMap == nil {
+		p.ServiceMap = make(map[string]*service)
 	}
 
 	service := new(service)
@@ -130,18 +145,18 @@ func (p *RPCXProtocol) register(rcvr interface{}, name string, useName bool) (st
 		log.Error(errorStr)
 		return sname, errors.New(errorStr)
 	}
-	p.serviceMap[service.name] = service
+	p.ServiceMap[service.name] = service
 	return sname, nil
 }
 
-func (p *RPCXProtocol) registerFunction(servicePath string, fn interface{}, name string, useName bool) (string, error) {
-	p.serviceMapMu.Lock()
-	defer p.serviceMapMu.Unlock()
-	if p.serviceMap == nil {
-		p.serviceMap = make(map[string]*service)
+func (p *BaseService) registerFunction(servicePath string, fn interface{}, name string, useName bool) (string, error) {
+	p.ServiceMapMu.Lock()
+	defer p.ServiceMapMu.Unlock()
+	if p.ServiceMap == nil {
+		p.ServiceMap = make(map[string]*service)
 	}
 
-	ss := p.serviceMap[servicePath]
+	ss := p.ServiceMap[servicePath]
 	if ss == nil {
 		ss = new(service)
 		ss.name = servicePath
@@ -206,7 +221,7 @@ func (p *RPCXProtocol) registerFunction(servicePath string, fn interface{}, name
 
 	// Install the methods
 	ss.function[fname] = &functionType{fn: f, ArgType: argType, ReplyType: replyType}
-	p.serviceMap[servicePath] = ss
+	p.ServiceMap[servicePath] = ss
 
 	return fname, nil
 }
@@ -282,7 +297,7 @@ func suitableMethods(typ reflect.Type, reportErr bool) map[string]*methodType {
 }
 
 
-func (s *service) call(ctx context.Context, mtype *methodType, argv, replyv reflect.Value) (err error) {
+func (s *service) Call(ctx context.Context, mtype *methodType, argv, replyv reflect.Value) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			//log.Errorf("failed to invoke service: %v, stacks: %s", r, string(debug.Stack()))
@@ -304,7 +319,7 @@ func (s *service) call(ctx context.Context, mtype *methodType, argv, replyv refl
 	return nil
 }
 
-func (s *service) callForFunction(ctx context.Context, ft *functionType, argv, replyv reflect.Value) (err error) {
+func (s *service) CallForFunction(ctx context.Context, ft *functionType, argv, replyv reflect.Value) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			//log.Errorf("failed to invoke service: %v, stacks: %s", r, string(debug.Stack()))

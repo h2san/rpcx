@@ -3,6 +3,7 @@ package protocol
 import (
 	"context"
 	"io"
+	"net/http"
 )
 
 type Message interface {}
@@ -13,14 +14,6 @@ type MsgProtocol interface {
 	EncodeMessage(res Message) []byte
 }
 
-// SerializeType defines serialization type of payload.
-type SerializeType byte
-
-const (
-	// SerializeNone uses raw []byte and don't serialize/deserialize
-	SerializeNone SerializeType = iota
-	// JSON for payload.
-	JSON
-	// ProtoBuffer for payload.
-	ProtoBuffer
-)
+type HttpHandlerProtocol interface {
+	http.Handler
+}

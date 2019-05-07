@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/h2san/rpcx/protocol"
+	"github.com/h2san/rpcx/codec"
 	"io"
 
 	"github.com/h2san/rpcx/util"
@@ -13,9 +13,9 @@ import (
 
 var (
 	// Compressors are compressors supported by rpcx. You can add customized compressor in Compressors.
-	Compressors = map[CompressType]protocol.Compressor{
-		None: &protocol.RawDataCompressor{},
-		Gzip: &protocol.GzipCompressor{},
+	Compressors = map[codec.CompressType]codec.Compressor{
+		codec.CompressNone: &codec.RawDataCompressor{},
+		codec.Gzip: &codec.GzipCompressor{},
 	}
 )
 
@@ -66,15 +66,7 @@ const (
 	Error
 )
 
-// CompressType defines decompression type.
-type CompressType byte
 
-const (
-	// None does not compress.
-	None CompressType = iota
-	// Gzip uses gzip compression.
-	Gzip
-)
 
 
 
@@ -158,12 +150,12 @@ func (h *Header) SetOneway(oneway bool) {
 }
 
 // CompressType returns compression type of messages.
-func (h Header) CompressType() CompressType {
-	return CompressType((h[2] & 0x1C) >> 2)
+func (h Header) CompressType() codec.CompressType {
+	return codec.CompressType((h[2] & 0x1C) >> 2)
 }
 
 // SetCompressType sets the compression type.
-func (h *Header) SetCompressType(ct CompressType) {
+func (h *Header) SetCompressType(ct codec.CompressType) {
 	h[2] = (h[2] &^ 0x1C) | ((byte(ct) << 2) & 0x1C)
 }
 
@@ -178,12 +170,12 @@ func (h *Header) SetMessageStatusType(mt MessageStatusType) {
 }
 
 // SerializeType returns serialization type of payload.
-func (h Header) SerializeType() protocol.SerializeType {
-	return protocol.SerializeType((h[3] & 0xF0) >> 4)
+func (h Header) SerializeType() codec.SerializeType {
+	return codec.SerializeType((h[3] & 0xF0) >> 4)
 }
 
 // SetSerializeType sets the serialization type.
-func (h *Header) SetSerializeType(st protocol.SerializeType) {
+func (h *Header) SetSerializeType(st codec.SerializeType) {
 	h[3] = (h[3] &^ 0xF0) | (byte(st) << 4)
 }
 
@@ -201,7 +193,7 @@ func (h *Header) SetSeq(seq uint64) {
 func (m Message) Clone() *Message {
 	header := *m.Header
 	c := GetPooledMsg()
-	header.SetCompressType(None)
+	header.SetCompressType(codec.CompressNone)
 	c.Header = &header
 	c.ServicePath = m.ServicePath
 	c.ServiceMethod = m.ServiceMethod
@@ -217,14 +209,14 @@ func (m Message) Encode() []byte {
 
 	var err error
 	payload := m.Payload
-	if m.CompressType() != None {
+	if m.CompressType() != codec.CompressNone {
 		compressor := Compressors[m.CompressType()]
 		if compressor == nil {
-			m.SetCompressType(None)
+			m.SetCompressType(codec.CompressNone)
 		} else {
 			payload, err = compressor.Zip(m.Payload)
 			if err != nil {
-				m.SetCompressType(None)
+				m.SetCompressType(codec.CompressNone)
 				payload = m.Payload
 			}
 		}
@@ -272,7 +264,7 @@ func (m Message) WriteTo(w io.Writer) error {
 	smL := len(m.ServiceMethod)
 
 	payload := m.Payload
-	if m.CompressType() != None {
+	if m.CompressType() != codec.CompressNone {
 		compressor := Compressors[m.CompressType()]
 		if compressor == nil {
 			return ErrUnsupportedCompressor
@@ -461,7 +453,7 @@ func (m *Message) Decode(r io.Reader) error {
 	n = n + 4
 	m.Payload = data[n:]
 
-	if m.CompressType() != None {
+	if m.CompressType() != codec.CompressNone {
 		compressor := Compressors[m.CompressType()]
 		if compressor == nil {
 			return ErrUnsupportedCompressor
