@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"github.com/h2san/rpcx/codec"
 	"io"
 	"net"
 	"sync"
@@ -99,8 +100,8 @@ type Option struct {
 
 	BackupLatency time.Duration
 	GenBreaker    func() Breaker
-	SerializeType protocol.SerializeType
-	CompressType  protocol.CompressType
+	SerializeType codec.SerializeType
+	CompressType  codec.CompressType
 
 	Heartbeat         bool
 	HeartbeatInterval time.Duration
@@ -188,7 +189,7 @@ func (client *Client) send(ctx context.Context, call *Call) {
 		return
 	}
 
-	codec := share.Codecs[client.option.SerializeType]
+	codec := codec.Codecs[client.option.SerializeType]
 	if codec == nil {
 		call.Error = ErrUnsupportedCodec
 		client.mutex.Unlock()

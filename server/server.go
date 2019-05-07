@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"github.com/h2san/rpcx/protocol/httpx"
+	"github.com/h2san/rpcx/protocol/rpcx"
 	"io"
 	"net"
+	"net/http"
 	"regexp"
 	"runtime"
 	"strings"
@@ -56,6 +59,8 @@ var (
 
 // Server is rpcx server that use TCP or UDP.
 type Server struct {
+	network string
+	address string
 	ln           net.Listener
 	readTimeout  time.Duration
 	writeTimeout time.Duration
@@ -72,6 +77,7 @@ type Server struct {
 	tlsConfig *tls.Config
 
 	Protocol protocol.MsgProtocol
+	Handler protocol.HttpHandlerProtocol
 
 	Plugins PluginContainer
 
@@ -123,7 +129,7 @@ func (s *Server) getDoneChan() <-chan struct{} {
 
 func (s *Server) startShutdownListener() {
 	go func(s *Server) {
-		log.Info("server pid:", os.Getpid())
+		log.Info("server:", s.network, " address:", s.address, " pid:", os.Getpid())
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, syscall.SIGTERM)
 		si := <-c
@@ -140,19 +146,39 @@ func (s *Server) startShutdownListener() {
 // Serve starts and listens RPC requests.
 // It is blocked until receiving connectings from clients.
 func (s *Server) Serve(network, address string) (err error) {
+	s.network = network
+	s.address = address
 	s.startShutdownListener()
 	var ln net.Listener
 	ln, err = s.makeListener(network, address)
 	if err != nil {
+		log.Errorf("crate listener fail", err)
 		return
 	}
+	if network == "http"{
+		return s.serverHTTP(ln)
+	}
 	return s.serveListener(ln)
+}
+
+func (s *Server) serverHTTP(ln net.Listener) error{
+	if s.Handler == nil {
+		s.Handler = &httpx.HTTProtocol{}
+	}
+	s.ln = ln
+	svr := http.Server{
+		Handler:s.Handler,
+	}
+	return svr.Serve(ln)
 }
 
 // serveListener accepts incoming connections on the Listener ln,
 // creating a new service goroutine for each.
 // The service goroutines read requests and then call services to reply to them.
 func (s *Server) serveListener(ln net.Listener) error {
+	if s.Protocol == nil {
+		s.Protocol = &rpcx.RPCXProtocol{}
+	}
 	if s.Plugins == nil {
 		s.Plugins = &pluginContainer{}
 	}
@@ -214,13 +240,9 @@ func (s *Server) serveListener(ln net.Listener) error {
 }
 
 
-type activeConn struct {
-	server    *Server
-	conn      net.Conn
-	cancelCtx context.CancelFunc
-	mu        sync.Mutex
-	in        chan protocol.Message
-	out       chan protocol.Message
+
+func (s *Server)  Register(rcvr interface{}, metadata string) error {
+	return nil
 }
 
 func (s *Server) serveConn(conn net.Conn) {
@@ -311,7 +333,7 @@ func (s *Server) serveConn(conn net.Conn) {
 					} else if strings.Contains(err.Error(), "use of closed network connection") {
 						log.Infof("rpcx: connection %s is closed", conn.RemoteAddr().String())
 					} else {
-						log.Warnf("rpcx: failed to read request: %v", err)
+						log.Errorf("rpcx: failed to read request: %v", err)
 					}
 					return
 				}
@@ -395,7 +417,7 @@ func (s *Server) serveConn(conn net.Conn) {
 			for{
 				select {
 				case <- ctx.Done():
-					log.Infof(" connection: %s write routine context done %v", conn.RemoteAddr().String(),ctx.Err())
+					log.Infof("connection: %s write routine context done %v", conn.RemoteAddr().String(),ctx.Err())
 					return
 				case resp := <- out:
 					data := s.Protocol.EncodeMessage(resp)
@@ -405,7 +427,7 @@ func (s *Server) serveConn(conn net.Conn) {
 		}(connctx, out)
 	}
 	wg.Wait()
-	log.Infof(" connection %s destroyed %v", conn.RemoteAddr().String())
+	log.Infof("connection %s destroyed", conn.RemoteAddr().String())
 }
 
 func isShutdown(s *Server) bool {

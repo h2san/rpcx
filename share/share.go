@@ -1,10 +1,5 @@
 package share
 
-import (
-	"github.com/h2san/rpcx/codec"
-	"github.com/h2san/rpcx/protocol"
-)
-
 const (
 	// DefaultRPCPath is used by ServeHTTP.
 	DefaultRPCPath = "/_rpcx_"
@@ -12,19 +7,7 @@ const (
 	AuthKey = "__AUTH"
 )
 
-var (
-	// Codecs are codecs supported by rpcx. You can add customized codecs in Codecs.
-	Codecs = map[protocol.SerializeType]codec.Codec{
-		protocol.SerializeNone: &codec.ByteCodec{},
-		protocol.JSON:          &codec.JSONCodec{},
-		protocol.ProtoBuffer:   &codec.PBCodec{},
-	}
-)
 
-// RegisterCodec register customized codec.
-func RegisterCodec(t protocol.SerializeType, c codec.Codec) {
-	Codecs[t] = c
-}
 
 // ContextKey defines key type in context.
 type ContextKey string
