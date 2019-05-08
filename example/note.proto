@@ -17,4 +17,5 @@ message AppListResp
 service Note
 {
     rpc GetAppList(AppListReq) returns(AppListResp);
+    rpc AppList(AppListReq) returns(AppListResp);
 }
