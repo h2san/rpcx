@@ -16,7 +16,7 @@ import (
 	"github.com/docker/libkv/store"
 	"github.com/docker/libkv/store/etcd"
 	metrics "github.com/rcrowley/go-metrics"
-	"github.com/h2san/rpcx/log"
+	"github.com/h2san/sanrpc/log"
 )
 
 func init() {
@@ -29,7 +29,7 @@ type EtcdRegisterPlugin struct {
 	ServiceAddress string
 	// etcd addresses
 	EtcdServers []string
-	// base path for rpcx server, for example com/example/rpcx
+	// base path for sanrpc server, for example com/example/sanrpc
 	BasePath string
 	Metrics  metrics.Registry
 	// Registered services
@@ -63,7 +63,7 @@ func (p *EtcdRegisterPlugin) Start() error {
 		p.kv = kv
 	}
 
-	err := p.kv.Put(p.BasePath, []byte("rpcx_path"), &store.WriteOptions{IsDir: true})
+	err := p.kv.Put(p.BasePath, []byte("sanrpc_path"), &store.WriteOptions{IsDir: true})
 	if err != nil && !strings.Contains(err.Error(), "Not a file") {
 		log.Errorf("cannot create etcd path %s: %v", p.BasePath, err)
 		return err
@@ -172,7 +172,7 @@ func (p *EtcdRegisterPlugin) Register(name string, rcvr interface{}, metadata st
 		p.kv = kv
 	}
 
-	err = p.kv.Put(p.BasePath, []byte("rpcx_path"), &store.WriteOptions{IsDir: true})
+	err = p.kv.Put(p.BasePath, []byte("sanrpc_path"), &store.WriteOptions{IsDir: true})
 	if err != nil && !strings.Contains(err.Error(), "Not a file") {
 		log.Errorf("cannot create etcd path %s: %v", p.BasePath, err)
 		return err
@@ -219,7 +219,7 @@ func (p *EtcdRegisterPlugin) Unregister(name string) (err error) {
 		p.kv = kv
 	}
 
-	err = p.kv.Put(p.BasePath, []byte("rpcx_path"), &store.WriteOptions{IsDir: true})
+	err = p.kv.Put(p.BasePath, []byte("sanrpc_path"), &store.WriteOptions{IsDir: true})
 	if err != nil && !strings.Contains(err.Error(), "Not a file") {
 		log.Errorf("cannot create etcd path %s: %v", p.BasePath, err)
 		return err

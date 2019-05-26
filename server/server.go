@@ -5,8 +5,8 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"github.com/h2san/rpcx/protocol/httpx"
-	"github.com/h2san/rpcx/protocol/rpcx"
+	"github.com/h2san/sanrpc/protocol/httpx"
+	"github.com/h2san/sanrpc/protocol/sanrpc"
 	"io"
 	"net"
 	"net/http"
@@ -21,9 +21,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/h2san/rpcx/log"
-	"github.com/h2san/rpcx/protocol"
-	"github.com/h2san/rpcx/share"
+	"github.com/h2san/sanrpc/log"
+	"github.com/h2san/sanrpc/protocol"
+	"github.com/h2san/sanrpc/share"
 )
 
 // ErrServerClosed is returned by the Server's Serve, ListenAndServe after a call to Shutdown or Close.
@@ -42,7 +42,7 @@ type contextKey struct {
 	name string
 }
 
-func (k *contextKey) String() string { return "rpcx context value " + k.name }
+func (k *contextKey) String() string { return "sanrpc context value " + k.name }
 
 var (
 	// RemoteConnContextKey is a context key. It can be used in
@@ -57,7 +57,7 @@ var (
 	TagContextKey = &contextKey{"service-tag"}
 )
 
-// Server is rpcx server that use TCP or UDP.
+// Server is sanrpc server that use TCP or UDP.
 type Server struct {
 	network string
 	address string
@@ -76,21 +76,35 @@ type Server struct {
 	// TLSConfig for creating tls tcp connection.
 	tlsConfig *tls.Config
 
-	Protocol protocol.MsgProtocol
-	Handler protocol.HttpHandlerProtocol
+	protocol protocol.MsgProtocol
+	httpHandler protocol.HTTPHandlerProtocol
 
-	Plugins PluginContainer
+	Plugins PluginContainerer
 
 	handlerMsgNum int32
 }
 
-// NewServer returns a server.
-func NewServer(options ...OptionFn) *Server {
+// NewRpcServer returns a server.
+func NewRpcServer(options ...OptionFn) *Server {
 	s := &Server{
-		Plugins: &pluginContainer{},
+		Plugins: &PluginContainer{},
+		protocol:&sanrpc.Protocol{},
 	}
 
 	for _, op := range options {
+		op(s)
+	}
+
+	return s
+}
+
+// NewHTTPServer return a http server
+func NewHTTPServer(options ...OptionFn) *Server{
+	s := &Server{
+		Plugins:&PluginContainer{},
+		httpHandler:&httpx.HTTProtocol{},
+	}
+	for _, op := range options{
 		op(s)
 	}
 
@@ -162,12 +176,9 @@ func (s *Server) Serve(network, address string) (err error) {
 }
 
 func (s *Server) serverHTTP(ln net.Listener) error{
-	if s.Handler == nil {
-		s.Handler = &httpx.HTTProtocol{}
-	}
 	s.ln = ln
 	svr := http.Server{
-		Handler:s.Handler,
+		Handler:s.httpHandler,
 	}
 	return svr.Serve(ln)
 }
@@ -176,11 +187,11 @@ func (s *Server) serverHTTP(ln net.Listener) error{
 // creating a new service goroutine for each.
 // The service goroutines read requests and then call services to reply to them.
 func (s *Server) serveListener(ln net.Listener) error {
-	if s.Protocol == nil {
-		s.Protocol = &rpcx.RPCXProtocol{}
+	if s.protocol == nil {
+		s.protocol = &sanrpc.Protocol{}
 	}
 	if s.Plugins == nil {
-		s.Plugins = &pluginContainer{}
+		s.Plugins = &PluginContainer{}
 	}
 
 	var tempDelay time.Duration
@@ -212,7 +223,7 @@ func (s *Server) serveListener(ln net.Listener) error {
 					tempDelay = max
 				}
 
-				log.Errorf("rpcx: Accept error: %v; retrying in %v", e, tempDelay)
+				log.Errorf("sanrpc: Accept error: %v; retrying in %v", e, tempDelay)
 				time.Sleep(tempDelay)
 				continue
 			}
@@ -239,12 +250,6 @@ func (s *Server) serveListener(ln net.Listener) error {
 	}
 }
 
-
-
-func (s *Server)  Register(rcvr interface{}, metadata string) error {
-	return nil
-}
-
 func (s *Server) serveConn(conn net.Conn) {
 	defer func() {
 		if err := recover(); err != nil {
@@ -263,7 +268,7 @@ func (s *Server) serveConn(conn net.Conn) {
 		conn.Close()
 
 		if s.Plugins == nil {
-			s.Plugins = &pluginContainer{}
+			s.Plugins = &PluginContainer{}
 		}
 
 		s.Plugins.DoPostConnClose(conn)
@@ -282,7 +287,7 @@ func (s *Server) serveConn(conn net.Conn) {
 			conn.SetWriteDeadline(time.Now().Add(d))
 		}
 		if err := tlsConn.Handshake(); err != nil {
-			log.Errorf("rpcx: TLS handshake error from %s: %v", conn.RemoteAddr(), err)
+			log.Errorf("sanrpc: TLS handshake error from %s: %v", conn.RemoteAddr(), err)
 			return
 		}
 	}
@@ -326,14 +331,14 @@ func (s *Server) serveConn(conn net.Conn) {
 				if s.readTimeout != 0 {
 					conn.SetReadDeadline(t0.Add(s.readTimeout))
 				}
-				req, err := s.Protocol.DecodeMessage(r)
+				req, err := s.protocol.DecodeMessage(r)
 				if err != nil {
 					if err == io.EOF {
 						log.Infof("client has closed this connection: %s", conn.RemoteAddr().String())
 					} else if strings.Contains(err.Error(), "use of closed network connection") {
-						log.Infof("rpcx: connection %s is closed", conn.RemoteAddr().String())
+						log.Infof("sanrpc: connection %s is closed", conn.RemoteAddr().String())
 					} else {
-						log.Errorf("rpcx: failed to read request: %v", err)
+						log.Errorf("sanrpc: failed to read request: %v", err)
 					}
 					return
 				}
@@ -385,7 +390,7 @@ func (s *Server) serveConn(conn net.Conn) {
 							}
 						}()
 						ctx.SetValue("serverr",s)
-						resp, err := s.Protocol.HandleMessage(ctx, req)
+						resp, err := s.protocol.HandleMessage(ctx, req)
 						if err != nil {
 							log.Warnf("rpc: failed to handle request: %v", err)
 							out <- resp
@@ -420,7 +425,7 @@ func (s *Server) serveConn(conn net.Conn) {
 					log.Infof("connection: %s write routine context done %v", conn.RemoteAddr().String(),ctx.Err())
 					return
 				case resp := <- out:
-					data := s.Protocol.EncodeMessage(resp)
+					data := s.protocol.EncodeMessage(resp)
 					conn.Write(data)
 				}
 			}

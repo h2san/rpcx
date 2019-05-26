@@ -13,19 +13,13 @@ const (
 )
 
 var (
-	// Codecs are codecs supported by rpcx. You can add customized codecs in Codecs.
+	// Codecs are codecs supported by sanrpc. You can add customized codecs in Codecs.
 	Codecs = map[SerializeType]Codec{
 		SerializeNone: &ByteCodec{},
 		JSON:          &JSONCodec{},
 		ProtoBuffer:   &PBCodec{},
 	}
 )
-
-// RegisterCodec register customized codec.
-func RegisterCodec(t SerializeType, c Codec) {
-	Codecs[t] = c
-}
-
 
 // CompressType defines decompression type.
 type CompressType byte

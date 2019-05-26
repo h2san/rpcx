@@ -2,15 +2,15 @@ package server
 
 import (
 	"context"
+	"github.com/h2san/sanrpc/errors"
+	"github.com/h2san/sanrpc/protocol"
 	"net"
-
-	"github.com/h2san/rpcx/errors"
-	"github.com/h2san/rpcx/protocol"
+	"net/http"
 )
 
 //PluginContainer represents a plugin container that defines all methods to manage plugins.
 //And it also defines all extension points.
-type PluginContainer interface {
+type PluginContainerer interface {
 	Add(plugin Plugin)
 	Remove(plugin Plugin)
 	All() []Plugin
@@ -32,6 +32,10 @@ type PluginContainer interface {
 
 	DoPreWriteRequest(ctx context.Context) error
 	DoPostWriteRequest(ctx context.Context, r protocol.Message, e error) error
+
+	// http
+	DoPreHandlerHTTPRequest(w http.ResponseWriter, r *http.Request) error
+	DoPostHandlerHTTPRequest(w http.ResponseWriter, r *http.Request) error
 }
 
 // Plugin is the server plugin interface.
@@ -96,20 +100,29 @@ type (
 	PostWriteRequestPlugin interface {
 		PostWriteRequest(ctx context.Context, r protocol.Message, e error) error
 	}
+
+	// http
+	PreHandlerHTTPRequestPlugin interface {
+		PreHandlerHTTPRequest(w http.ResponseWriter, r *http.Request) error
+	}
+
+	PostHandlerHTTPRequestPlugin interface {
+		PostHandlerHTTPRequest(w http.ResponseWriter, r *http.Request) error
+	}
 )
 
 // pluginContainer implements PluginContainer interface.
-type pluginContainer struct {
+type PluginContainer struct {
 	plugins []Plugin
 }
 
 // Add adds a plugin.
-func (p *pluginContainer) Add(plugin Plugin) {
+func (p *PluginContainer) Add(plugin Plugin) {
 	p.plugins = append(p.plugins, plugin)
 }
 
 // Remove removes a plugin by it's name.
-func (p *pluginContainer) Remove(plugin Plugin) {
+func (p *PluginContainer) Remove(plugin Plugin) {
 	if p.plugins == nil {
 		return
 	}
@@ -124,12 +137,12 @@ func (p *pluginContainer) Remove(plugin Plugin) {
 	p.plugins = plugins
 }
 
-func (p *pluginContainer) All() []Plugin {
+func (p *PluginContainer) All() []Plugin {
 	return p.plugins
 }
 
 // DoRegister invokes DoRegister plugin.
-func (p *pluginContainer) DoRegister(name string, rcvr interface{}, metadata string) error {
+func (p *PluginContainer) DoRegister(name string, rcvr interface{}, metadata string) error {
 	var es []error
 	for _, rp := range p.plugins {
 		if plugin, ok := rp.(RegisterPlugin); ok {
@@ -147,7 +160,7 @@ func (p *pluginContainer) DoRegister(name string, rcvr interface{}, metadata str
 }
 
 // DoRegisterFunction invokes DoRegisterFunction plugin.
-func (p *pluginContainer) DoRegisterFunction(name string, fn interface{}, metadata string) error {
+func (p *PluginContainer) DoRegisterFunction(name string, fn interface{}, metadata string) error {
 	var es []error
 	for _, rp := range p.plugins {
 		if plugin, ok := rp.(RegisterFunctionPlugin); ok {
@@ -165,7 +178,7 @@ func (p *pluginContainer) DoRegisterFunction(name string, fn interface{}, metada
 }
 
 // DoUnregister invokes RegisterPlugin.
-func (p *pluginContainer) DoUnregister(name string) error {
+func (p *PluginContainer) DoUnregister(name string) error {
 	var es []error
 	for _, rp := range p.plugins {
 		if plugin, ok := rp.(RegisterPlugin); ok {
@@ -183,7 +196,7 @@ func (p *pluginContainer) DoUnregister(name string) error {
 }
 
 //DoPostConnAccept handles accepted conn
-func (p *pluginContainer) DoPostConnAccept(conn net.Conn) (net.Conn, bool) {
+func (p *PluginContainer) DoPostConnAccept(conn net.Conn) (net.Conn, bool) {
 	var flag bool
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PostConnAcceptPlugin); ok {
@@ -198,7 +211,7 @@ func (p *pluginContainer) DoPostConnAccept(conn net.Conn) (net.Conn, bool) {
 }
 
 //DoPostConnClose handles closed conn
-func (p *pluginContainer) DoPostConnClose(conn net.Conn) bool {
+func (p *PluginContainer) DoPostConnClose(conn net.Conn) bool {
 	var flag bool
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PostConnClosePlugin); ok {
@@ -212,7 +225,7 @@ func (p *pluginContainer) DoPostConnClose(conn net.Conn) bool {
 }
 
 // DoPreReadRequest invokes PreReadRequest plugin.
-func (p *pluginContainer) DoPreReadRequest(ctx context.Context) error {
+func (p *PluginContainer) DoPreReadRequest(ctx context.Context) error {
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PreReadRequestPlugin); ok {
 			err := plugin.PreReadRequest(ctx)
@@ -226,7 +239,7 @@ func (p *pluginContainer) DoPreReadRequest(ctx context.Context) error {
 }
 
 // DoPostReadRequest invokes PostReadRequest plugin.
-func (p *pluginContainer) DoPostReadRequest(ctx context.Context, r protocol.Message, e error) error {
+func (p *PluginContainer) DoPostReadRequest(ctx context.Context, r protocol.Message, e error) error {
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PostReadRequestPlugin); ok {
 			err := plugin.PostReadRequest(ctx, r, e)
@@ -240,7 +253,7 @@ func (p *pluginContainer) DoPostReadRequest(ctx context.Context, r protocol.Mess
 }
 
 // DoPreHandleRequest invokes PreHandleRequest plugin.
-func (p *pluginContainer) DoPreHandleRequest(ctx context.Context, r protocol.Message) error {
+func (p *PluginContainer) DoPreHandleRequest(ctx context.Context, r protocol.Message) error {
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PreHandleRequestPlugin); ok {
 			err := plugin.PreHandleRequest(ctx, r)
@@ -254,7 +267,7 @@ func (p *pluginContainer) DoPreHandleRequest(ctx context.Context, r protocol.Mes
 }
 
 // DoPreWriteResponse invokes PreWriteResponse plugin.
-func (p *pluginContainer) DoPreWriteResponse(ctx context.Context, req protocol.Message, res protocol.Message) error {
+func (p *PluginContainer) DoPreWriteResponse(ctx context.Context, req protocol.Message, res protocol.Message) error {
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PreWriteResponsePlugin); ok {
 			err := plugin.PreWriteResponse(ctx, req, res)
@@ -268,7 +281,7 @@ func (p *pluginContainer) DoPreWriteResponse(ctx context.Context, req protocol.M
 }
 
 // DoPostWriteResponse invokes PostWriteResponse plugin.
-func (p *pluginContainer) DoPostWriteResponse(ctx context.Context, req protocol.Message, resp protocol.Message, e error) error {
+func (p *PluginContainer) DoPostWriteResponse(ctx context.Context, req protocol.Message, resp protocol.Message, e error) error {
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PostWriteResponsePlugin); ok {
 			err := plugin.PostWriteResponse(ctx, req, resp, e)
@@ -282,7 +295,7 @@ func (p *pluginContainer) DoPostWriteResponse(ctx context.Context, req protocol.
 }
 
 // DoPreWriteRequest invokes PreWriteRequest plugin.
-func (p *pluginContainer) DoPreWriteRequest(ctx context.Context) error {
+func (p *PluginContainer) DoPreWriteRequest(ctx context.Context) error {
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PreWriteRequestPlugin); ok {
 			err := plugin.PreWriteRequest(ctx)
@@ -296,10 +309,37 @@ func (p *pluginContainer) DoPreWriteRequest(ctx context.Context) error {
 }
 
 // DoPostWriteRequest invokes PostWriteRequest plugin.
-func (p *pluginContainer) DoPostWriteRequest(ctx context.Context, r protocol.Message, e error) error {
+func (p *PluginContainer) DoPostWriteRequest(ctx context.Context, r protocol.Message, e error) error {
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(PostWriteRequestPlugin); ok {
 			err := plugin.PostWriteRequest(ctx, r, e)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+
+func (p *PluginContainer) DoPreHandlerHTTPRequest(w http.ResponseWriter, r *http.Request) error {
+	for i := range p.plugins {
+		if plugin, ok := p.plugins[i].(PreHandlerHTTPRequestPlugin); ok {
+			err := plugin.PreHandlerHTTPRequest(w, r)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+
+}
+func (p *PluginContainer) DoPostHandlerHTTPRequest(w http.ResponseWriter, r *http.Request) error {
+	for i := range p.plugins {
+		if plugin, ok := p.plugins[i].(PostHandlerHTTPRequestPlugin); ok {
+			err := plugin.PostHandlerHTTPRequest(w, r)
 			if err != nil {
 				return err
 			}

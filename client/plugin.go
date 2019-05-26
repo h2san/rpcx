@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/h2san/rpcx/protocol"
+	"github.com/h2san/sanrpc/protocol"
 )
 
 // pluginContainer implements PluginContainer interface.
@@ -102,7 +102,7 @@ func (p *pluginContainer) DoClientConnectionClose(conn net.Conn) bool {
 }
 
 // DoClientBeforeEncode is called when requests are encoded and sent.
-func (p *pluginContainer) DoClientBeforeEncode(req *protocol.Message) bool {
+func (p *pluginContainer) DoClientBeforeEncode(req protocol.Message) bool {
 	var handleOk bool
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(ClientBeforeEncodePlugin); ok {
@@ -116,7 +116,7 @@ func (p *pluginContainer) DoClientBeforeEncode(req *protocol.Message) bool {
 }
 
 // DoClientBeforeEncode is called when requests are encoded and sent.
-func (p *pluginContainer) DoClientAfterDecode(req *protocol.Message) bool {
+func (p *pluginContainer) DoClientAfterDecode(req protocol.Message) bool {
 	var handleOk bool
 	for i := range p.plugins {
 		if plugin, ok := p.plugins[i].(ClientAfterDecodePlugin); ok {
@@ -152,12 +152,12 @@ type (
 
 	// ClientBeforeEncodePlugin is invoked when the message is encoded and sent.
 	ClientBeforeEncodePlugin interface {
-		ClientBeforeEncode(*protocol.Message) bool
+		ClientBeforeEncode(protocol.Message) bool
 	}
 
 	// ClientAfterDecodePlugin is invoked when the message is decoded.
 	ClientAfterDecodePlugin interface {
-		ClientAfterDecode(*protocol.Message) bool
+		ClientAfterDecode(protocol.Message) bool
 	}
 
 	//PluginContainer represents a plugin container that defines all methods to manage plugins.
@@ -173,7 +173,7 @@ type (
 		DoPreCall(ctx context.Context, servicePath, serviceMethod string, args interface{}) error
 		DoPostCall(ctx context.Context, servicePath, serviceMethod string, args interface{}, reply interface{}, err error) error
 
-		DoClientBeforeEncode(*protocol.Message) bool
-		DoClientAfterDecode(*protocol.Message) bool
+		DoClientBeforeEncode(protocol.Message) bool
+		DoClientAfterDecode(protocol.Message) bool
 	}
 )

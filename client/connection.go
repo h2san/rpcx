@@ -9,50 +9,53 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/h2san/rpcx/log"
-	"github.com/h2san/rpcx/share"
+	"github.com/h2san/sanrpc/log"
+	"github.com/h2san/sanrpc/share"
 )
+
+// ReaderBuffSize is used for bufio reader.
+const ReaderBuffSize = 16 * 1024
+
 
 type makeConnFn func(c *Client, network, address string) (net.Conn, error)
 
 var makeConnMap = make(map[string]makeConnFn)
 
 // Connect connects the server via specified network.
-func (c *Client) Connect(network, address string) error {
+func (client *Client) Connect(network, address string) error {
 	var conn net.Conn
 	var err error
 
 	switch network {
 	case "http":
-		conn, err = newDirectHTTPConn(c, network, address)
+		conn, err = newDirectHTTPConn(client, network, address)
 	case "unix":
-		conn, err = newDirectConn(c, network, address)
+		conn, err = newDirectConn(client, network, address)
 	default:
 		fn := makeConnMap[network]
 		if fn != nil {
-			conn, err = fn(c, network, address)
+			conn, err = fn(client, network, address)
 		} else {
-			conn, err = newDirectConn(c, network, address)
+			conn, err = newDirectConn(client, network, address)
 		}
 	}
 
 	if err == nil && conn != nil {
-		if c.option.ReadTimeout != 0 {
-			conn.SetReadDeadline(time.Now().Add(c.option.ReadTimeout))
+		if client.option.ReadTimeout != 0 {
+			_ = conn.SetReadDeadline(time.Now().Add(client.option.ReadTimeout))
 		}
-		if c.option.WriteTimeout != 0 {
-			conn.SetWriteDeadline(time.Now().Add(c.option.WriteTimeout))
+		if client.option.WriteTimeout != 0 {
+			_ = conn.SetWriteDeadline(time.Now().Add(client.option.WriteTimeout))
 		}
 
-		c.Conn = conn
-		c.r = bufio.NewReaderSize(conn, ReaderBuffsize)
-		//c.w = bufio.NewWriterSize(conn, WriterBuffsize)
+		client.Conn = conn
+		client.r = bufio.NewReaderSize(conn, ReaderBuffSize)
 
 		// start reading and writing since connected
-		go c.input()
+		go client.input()
 
-		if c.option.Heartbeat && c.option.HeartbeatInterval > 0 {
-			go c.heartbeat()
+		if client.option.Heartbeat && client.option.HeartbeatInterval > 0 {
+			go client.heartbeat()
 		}
 
 	}
@@ -89,7 +92,7 @@ func newDirectConn(c *Client, network, address string) (net.Conn, error) {
 	return conn, nil
 }
 
-var connected = "200 Connected to rpcx"
+var connected = "200 Connected to sanrpc"
 
 func newDirectHTTPConn(c *Client, network, address string) (net.Conn, error) {
 	path := c.option.RPCPath

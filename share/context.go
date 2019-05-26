@@ -8,7 +8,7 @@ import (
 
 // var _ context.Context = &Context{}
 
-// Context is a rpcx customized Context that can contains multiple values.
+// Context is a sanrpc customized Context that can contains multiple values.
 type Context struct {
 	tags map[interface{}]interface{}
 	context.Context
@@ -46,14 +46,3 @@ func WithValue(parent context.Context, key, val interface{}) *Context {
 	return &Context{Context: parent, tags: tags}
 }
 
-func WithLocalValue(ctx *Context, key, val interface{}) *Context {
-	if key == nil {
-		panic("nil key")
-	}
-	if !reflect.TypeOf(key).Comparable() {
-		panic("key is not comparable")
-	}
-
-	ctx.tags[key] = val
-	return ctx
-}

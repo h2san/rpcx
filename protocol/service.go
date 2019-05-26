@@ -11,7 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/h2san/rpcx/log"
+	"github.com/h2san/sanrpc/log"
 )
 
 
@@ -73,6 +73,10 @@ func isExportedOrBuiltinType(t reflect.Type) bool {
 	return isExported(t.Name()) || t.PkgPath() == ""
 }
 
+func (p*BaseService) RegisterService(rcvr interface{}) error {
+	_, err := p.register(rcvr, "", false)
+	return err
+}
 
 func (p *BaseService) Register(rcvr interface{}, metadata string) error {
 	_, err := p.register(rcvr, "", false)
@@ -118,12 +122,12 @@ func (p *BaseService) register(rcvr interface{}, name string, useName bool) (str
 		sname = name
 	}
 	if sname == "" {
-		errorStr := "rpcx.Register: no service name for type " + service.typ.String()
+		errorStr := "sanrpc.Register: no service name for type " + service.typ.String()
 		log.Error(errorStr)
 		return sname, errors.New(errorStr)
 	}
 	if !useName && !isExported(sname) {
-		errorStr := "rpcx.Register: type " + sname + " is not exported"
+		errorStr := "sanrpc.Register: type " + sname + " is not exported"
 		log.Error(errorStr)
 		return sname, errors.New(errorStr)
 	}
@@ -138,14 +142,20 @@ func (p *BaseService) register(rcvr interface{}, name string, useName bool) (str
 		// To help the user, see if a pointer receiver would work.
 		method := suitableMethods(reflect.PtrTo(service.typ), false)
 		if len(method) != 0 {
-			errorStr = "rpcx.Register: type " + sname + " has no exported methods of suitable type (hint: pass a pointer to value of that type)"
+			errorStr = "sanrpc.Register: type " + sname + " has no exported methods of suitable type (hint: pass a pointer to value of that type)"
 		} else {
-			errorStr = "rpcx.Register: type " + sname + " has no exported methods of suitable type"
+			errorStr = "sanrpc.Register: type " + sname + " has no exported methods of suitable type"
 		}
 		log.Error(errorStr)
 		return sname, errors.New(errorStr)
 	}
 	p.ServiceMap[service.name] = service
+
+	log.Infof("register service: %v success ",service.name)
+	for key,_:= range service.method{
+		log.Infof("register method: %v success ",key)
+	}
+
 	return sname, nil
 }
 
@@ -182,17 +192,17 @@ func (p *BaseService) registerFunction(servicePath string, fn interface{}, name 
 		fname = name
 	}
 	if fname == "" {
-		errorStr := "rpcx.registerFunction: no func name for type " + f.Type().String()
+		errorStr := "sanrpc.registerFunction: no func name for type " + f.Type().String()
 		log.Error(errorStr)
 		return fname, errors.New(errorStr)
 	}
 
 	t := f.Type()
 	if t.NumIn() != 3 {
-		return fname, fmt.Errorf("rpcx.registerFunction: has wrong number of ins: %s", f.Type().String())
+		return fname, fmt.Errorf("sanrpc.registerFunction: has wrong number of ins: %s", f.Type().String())
 	}
 	if t.NumOut() != 1 {
-		return fname, fmt.Errorf("rpcx.registerFunction: has wrong number of outs: %s", f.Type().String())
+		return fname, fmt.Errorf("sanrpc.registerFunction: has wrong number of outs: %s", f.Type().String())
 	}
 
 	// First arg must be context.Context

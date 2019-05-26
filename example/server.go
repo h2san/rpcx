@@ -14,7 +14,7 @@ func main() {
 	flag.Parse()
 
 	s := server.NewServer()
-	p :=&rpcx.RPCXProtocol{}
+	p :=&rpcx.Protocol{}
 	
 	s.Protocol = p
 	s.Serve("tcp", "127.0.0.1:8972")
